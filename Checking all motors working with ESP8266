@@ -1,0 +1,107 @@
+// -------------------------
+// ESP8266 + L298N
+// 4 Wheel Robot Car
+// -------------------------
+
+// Left Motor
+#define ENA D5
+#define IN1 D1
+#define IN2 D2
+
+// Right Motor
+#define ENB D8
+#define IN3 D6
+#define IN4 D7
+
+int speedValue = 800;      // 0-1023 for ESP8266 PWM
+
+void setup() {
+
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  stopMotors();
+}
+
+void loop() {
+
+  forward();
+  delay(3000);
+
+  backward();
+  delay(3000);
+
+  left();
+  delay(2000);
+
+  right();
+  delay(2000);
+
+  stopMotors();
+  delay(3000);
+}
+
+void forward() {
+
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, speedValue);
+}
+
+void backward() {
+
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, speedValue);
+}
+
+void left() {
+
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, speedValue);
+}
+
+void right() {
+
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, speedValue);
+}
+
+void stopMotors() {
+
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+}
