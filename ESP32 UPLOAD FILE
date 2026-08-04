@@ -10,7 +10,7 @@ const char* password = "YOUR_WIFI_PASSWORD";
 //==============================
 // ESP8266 Receiver IP
 //==============================
-IPAddress receiverIP(192,168,90,241);
+IPAddress receiverIP(""YOUR IP ADDRESS);
 
 const unsigned int receiverPort = 4210;
 
