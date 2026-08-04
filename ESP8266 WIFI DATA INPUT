@@ -4,8 +4,8 @@
 //========================
 // WiFi Settings
 //========================
-const char* ssid = "E";
-const char* password = "123456789012";
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
 
 //========================
 // UDP Settings
