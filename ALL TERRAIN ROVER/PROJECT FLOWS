@@ -1,0 +1,72 @@
+# Project Updates & Issues Faced
+
+## 1. Initial Motor Control
+
+* Started with basic motor control and differential-drive logic.
+* Faced issues with incorrect motor direction and GPIO assignments.
+* Tested individual motors and corrected the left/right motor connections and control logic.
+
+## 2. ESP8266 Wi-Fi Communication
+
+* Initially worked with ESP8266 for Wi-Fi-based communication.
+* Faced problems with Wi-Fi connection and sending control data.
+* Implemented Wi-Fi communication and verified data transfer between the controller and rover.
+
+## 3. ESP32 Migration
+
+* The project was later changed from ESP8266 to ESP32 for both the remote and rover.
+* Updated the GPIO pin assignments and motor-control code to match the ESP32.
+* Modified the communication code to work with the ESP32 hardware.
+
+## 4. Controller/Rover Communication
+
+* Initially experimented with different communication methods.
+* ESP-NOW was tested but encountered reliability and connection issues.
+* Switched to a Wi-Fi hotspot-based setup:
+
+  * Remote ESP32 → provides the Wi-Fi connection.
+  * Rover ESP32 → connects to the remote Wi-Fi.
+* This provided a simpler communication architecture for the project.
+
+## 5. Wi-Fi Configuration
+
+* Initially, changing the Wi-Fi network required modifying the code.
+* Added a Wi-Fi configuration/data-input system so network details could be configured more easily.
+* This reduced the need to rewrite the main control program when changing network settings.
+
+## 6. Rover Motor Control
+
+* Tested forward, backward, left, and right movement.
+* Faced issues where some motors moved in the opposite direction.
+* Corrected motor polarity and control logic.
+* Adjusted the left-front and left-rear motor configuration.
+
+## 7. ESP32 Upload/Programming Issues
+
+* Faced upload and connection issues while developing with different ESP boards and environments.
+* Tested the boards individually and verified the correct board configuration, USB/COM connection, and GPIO assignments.
+* Continued development after confirming successful ESP32 programming.
+
+## 8. Code Development & Testing
+
+* The project was developed through multiple iterations rather than using a single final version from the beginning.
+* Individual features were tested before combining them:
+
+  * Wi-Fi
+  * Communication
+  * Motor control
+  * Rover movement
+  * Remote control
+
+## 9. 3D Printing & Rover Body Design
+
+* Over the last three days, development has shifted toward planning and designing the **3D-printed models and physical enclosure** for the rover.
+* Focused on determining suitable locations and dimensions for **ports, displays, switches, and other external components**.
+* Currently facing challenges with the placement of ports and displays while maintaining accessibility and a practical overall design.
+* Component placement also needs to account for **ESP32 connections, wiring, accessibility, and the overall rover structure**.
+* The 3D model is currently being refined, and further adjustments will be made before producing the final printed parts.
+
+## Current Status
+
+* The rover's communication and motor-control system has gone through multiple rounds of testing and improvement.
+* The project is currently focused on **finalizing the 3D-printed body design and component placement** before moving toward the final physical assembly.
