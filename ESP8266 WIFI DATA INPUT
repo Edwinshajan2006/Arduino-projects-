@@ -1,0 +1,49 @@
+#include <ESP8266WiFi.h>
+#include <espnow.h>
+
+typedef struct {
+  int x;
+  int y;
+  bool stop;
+} ControllerData;
+
+ControllerData data;
+
+uint8_t receiverMAC[] = {0x24,0x6F,0x28,0x00,0x00,0x00};   // Replace later
+
+void setup() {
+
+  Serial.begin(115200);
+
+  WiFi.mode(WIFI_STA);
+
+  if (esp_now_init() != 0) {
+    Serial.println("ESP-NOW Init Failed");
+    return;
+  }
+
+  esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
+
+  esp_now_add_peer(receiverMAC,
+                   ESP_NOW_ROLE_SLAVE,
+                   1,
+                   NULL,
+                   0);
+
+  pinMode(D6, INPUT_PULLUP);
+}
+
+void loop() {
+
+  data.x = analogRead(A0);
+
+  data.y = 512;
+
+  data.stop = !digitalRead(D6);
+
+  esp_now_send(receiverMAC,
+               (uint8_t *)&data,
+               sizeof(data));
+
+  delay(20);
+}

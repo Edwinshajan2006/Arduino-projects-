@@ -1,0 +1,337 @@
+#include <WiFi.h>
+#include <esp_now.h>
+
+// =====================================================
+// ESP32 CONTROLLER
+// =====================================================
+
+#define JOY_X  34
+#define JOY_Y  35
+#define JOY_SW 27
+
+// Rover ESP32 MAC
+uint8_t roverMAC[] = {
+  0x68, 0x25, 0xDD,
+  0xFD, 0x3C, 0xE4
+};
+
+// =====================================================
+// FILTER SETTINGS
+// =====================================================
+
+#define NUM_SAMPLES 10
+#define DEADZONE 120
+
+// 0.1 = smoother
+// 0.3 = faster response
+#define SMOOTHING 0.20
+
+// Change to false if forward/backward is reversed
+#define INVERT_Y true
+
+// =====================================================
+// DATA SENT TO ROVER
+// This MUST match the rover code
+// =====================================================
+
+typedef struct {
+
+  int16_t throttle;
+  int16_t steering;
+  bool button;
+
+} ControlData;
+
+ControlData data;
+
+// =====================================================
+// JOYSTICK CALIBRATION
+// =====================================================
+
+int centerX = 2048;
+int centerY = 2048;
+
+float filteredX = 2048;
+float filteredY = 2048;
+
+// =====================================================
+// READ MULTIPLE ADC SAMPLES
+// =====================================================
+
+int readAverage(int pin) {
+
+  long total = 0;
+
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+
+    total += analogRead(pin);
+
+    delayMicroseconds(300);
+  }
+
+  return total / NUM_SAMPLES;
+}
+
+// =====================================================
+// CALIBRATE JOYSTICK
+// =====================================================
+
+void calibrateJoystick() {
+
+  Serial.println();
+  Serial.println("================================");
+  Serial.println(" JOYSTICK CALIBRATION");
+  Serial.println(" KEEP JOYSTICK CENTERED");
+  Serial.println("================================");
+
+  delay(2000);
+
+  long totalX = 0;
+  long totalY = 0;
+
+  for (int i = 0; i < 100; i++) {
+
+    totalX += analogRead(JOY_X);
+    totalY += analogRead(JOY_Y);
+
+    delay(10);
+  }
+
+  centerX = totalX / 100;
+  centerY = totalY / 100;
+
+  filteredX = centerX;
+  filteredY = centerY;
+
+  Serial.print("Center X = ");
+  Serial.println(centerX);
+
+  Serial.print("Center Y = ");
+  Serial.println(centerY);
+
+  Serial.println("Calibration complete.");
+  Serial.println();
+}
+
+// =====================================================
+// CONVERT ADC VALUE TO -255 TO +255
+// =====================================================
+
+int convertAxis(int value, int center) {
+
+  int difference = value - center;
+
+  // -------------------------------
+  // DEADZONE
+  // -------------------------------
+
+  if (abs(difference) <= DEADZONE) {
+
+    return 0;
+  }
+
+  int output;
+
+  // Positive direction
+  if (difference > 0) {
+
+    output = map(
+      difference,
+      DEADZONE,
+      4095 - center,
+      0,
+      255
+    );
+
+  }
+
+  // Negative direction
+  else {
+
+    output = map(
+      difference,
+      -center,
+      -DEADZONE,
+      -255,
+      0
+    );
+  }
+
+  return constrain(output, -255, 255);
+}
+
+// =====================================================
+// SETUP
+// =====================================================
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(JOY_X, INPUT);
+  pinMode(JOY_Y, INPUT);
+  pinMode(JOY_SW, INPUT_PULLUP);
+
+  analogReadResolution(12);
+
+  WiFi.mode(WIFI_STA);
+
+  delay(500);
+
+  Serial.println();
+  Serial.println("================================");
+  Serial.println("     ALL TERRAIN ROVER");
+  Serial.println("       CONTROLLER");
+  Serial.println("================================");
+
+  Serial.print("Controller MAC: ");
+  Serial.println(WiFi.macAddress());
+
+  // -------------------------------
+  // CALIBRATE
+  // -------------------------------
+
+  calibrateJoystick();
+
+  // -------------------------------
+  // ESP-NOW
+  // -------------------------------
+
+  if (esp_now_init() != ESP_OK) {
+
+    Serial.println("ESP-NOW INITIALIZATION FAILED!");
+
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  // -------------------------------
+  // ADD ROVER
+  // -------------------------------
+
+  esp_now_peer_info_t peerInfo = {};
+
+  memcpy(
+    peerInfo.peer_addr,
+    roverMAC,
+    6
+  );
+
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+
+    Serial.println("FAILED TO ADD ROVER!");
+
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  Serial.println("ESP-NOW READY");
+  Serial.println("Controller ready.");
+  Serial.println();
+}
+
+// =====================================================
+// LOOP
+// =====================================================
+
+void loop() {
+
+  // -------------------------------
+  // READ JOYSTICK
+  // -------------------------------
+
+  int rawX = readAverage(JOY_X);
+  int rawY = readAverage(JOY_Y);
+
+  // -------------------------------
+  // SMOOTH
+  // -------------------------------
+
+  filteredX =
+    (SMOOTHING * rawX) +
+    ((1.0 - SMOOTHING) * filteredX);
+
+  filteredY =
+    (SMOOTHING * rawY) +
+    ((1.0 - SMOOTHING) * filteredY);
+
+  // -------------------------------
+  // CONVERT
+  // -------------------------------
+
+  int steering =
+    convertAxis(
+      (int)filteredX,
+      centerX
+    );
+
+  int throttle =
+    convertAxis(
+      (int)filteredY,
+      centerY
+    );
+
+  // -------------------------------
+  // INVERT Y
+  // -------------------------------
+
+  if (INVERT_Y) {
+
+    throttle = -throttle;
+  }
+
+  // -------------------------------
+  // JOYSTICK BUTTON
+  // -------------------------------
+
+  data.button =
+    (digitalRead(JOY_SW) == LOW);
+
+  // -------------------------------
+  // STORE DATA
+  // -------------------------------
+
+  data.throttle = throttle;
+  data.steering = steering;
+
+  // -------------------------------
+  // SEND TO ROVER
+  // -------------------------------
+
+  esp_err_t result = esp_now_send(
+    roverMAC,
+    (uint8_t *)&data,
+    sizeof(data)
+  );
+
+  // -------------------------------
+  // SERIAL MONITOR
+  // -------------------------------
+
+  Serial.print("Throttle: ");
+  Serial.print(data.throttle);
+
+  Serial.print(" | Steering: ");
+  Serial.print(data.steering);
+
+  Serial.print(" | Button: ");
+
+  if (data.button) {
+    Serial.println("PRESSED");
+  }
+  else {
+    Serial.println("RELEASED");
+  }
+
+  if (result != ESP_OK) {
+
+    Serial.println("ESP-NOW SEND ERROR");
+  }
+
+  delay(50);
+}

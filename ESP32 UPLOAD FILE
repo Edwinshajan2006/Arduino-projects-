@@ -1,0 +1,82 @@
+#include <WiFi.h>
+#include <esp_now.h>
+
+typedef struct {
+  int x;
+  int y;
+  bool stop;
+} ControllerData;
+
+ControllerData incoming;
+
+const int IN1 = 26;
+const int IN2 = 27;
+const int IN3 = 33;
+const int IN4 = 32;
+
+void OnDataRecv(const esp_now_recv_info_t *info,
+                const uint8_t *data,
+                int len)
+{
+  memcpy(&incoming, data, sizeof(incoming));
+}
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(IN1,OUTPUT);
+  pinMode(IN2,OUTPUT);
+  pinMode(IN3,OUTPUT);
+  pinMode(IN4,OUTPUT);
+
+  WiFi.mode(WIFI_STA);
+
+  esp_now_init();
+
+  esp_now_register_recv_cb(OnDataRecv);
+}
+
+void loop() {
+
+  if(incoming.stop){
+
+      digitalWrite(IN1,LOW);
+      digitalWrite(IN2,LOW);
+      digitalWrite(IN3,LOW);
+      digitalWrite(IN4,LOW);
+
+      return;
+  }
+
+  if(incoming.x>700){
+
+      digitalWrite(IN1,HIGH);
+      digitalWrite(IN2,LOW);
+
+      digitalWrite(IN3,HIGH);
+      digitalWrite(IN4,LOW);
+
+  }
+
+  else if(incoming.x<300){
+
+      digitalWrite(IN1,LOW);
+      digitalWrite(IN2,HIGH);
+
+      digitalWrite(IN3,LOW);
+      digitalWrite(IN4,HIGH);
+
+  }
+
+  else{
+
+      digitalWrite(IN1,LOW);
+      digitalWrite(IN2,LOW);
+
+      digitalWrite(IN3,LOW);
+      digitalWrite(IN4,LOW);
+
+  }
+
+}
