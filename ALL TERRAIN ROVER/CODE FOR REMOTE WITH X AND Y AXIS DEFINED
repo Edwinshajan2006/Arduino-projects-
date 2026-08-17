@@ -1,0 +1,251 @@
+#include <WiFi.h>
+#include <WiFiUdp.h>
+
+// =====================================================
+// WIFI HOTSPOT
+// =====================================================
+
+const char* SSID = "ROVER_REMOTE";
+const char* PASSWORD = "rover1234";
+
+WiFiUDP udp;
+
+const unsigned int UDP_PORT = 4210;
+
+// =====================================================
+// JOYSTICK
+// =====================================================
+
+#define JOY_X  34
+#define JOY_Y  35
+#define JOY_SW 27
+
+// =====================================================
+// JOYSTICK SETTINGS
+// =====================================================
+
+#define NUM_SAMPLES 10
+#define DEADZONE 120
+#define SMOOTHING 0.20
+
+#define INVERT_Y true
+
+int centerX = 2048;
+int centerY = 2048;
+
+float filteredX;
+float filteredY;
+
+
+// =====================================================
+// READ AVERAGE
+// =====================================================
+
+int readAverage(int pin) {
+
+  long total = 0;
+
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+
+    total += analogRead(pin);
+
+    delayMicroseconds(300);
+  }
+
+  return total / NUM_SAMPLES;
+}
+
+
+// =====================================================
+// CALIBRATE JOYSTICK
+// =====================================================
+
+void calibrateJoystick() {
+
+  Serial.println();
+  Serial.println("==============================");
+  Serial.println("   JOYSTICK CALIBRATION");
+  Serial.println("   KEEP STICK CENTERED");
+  Serial.println("==============================");
+
+  delay(2000);
+
+  long totalX = 0;
+  long totalY = 0;
+
+  for (int i = 0; i < 100; i++) {
+
+    totalX += analogRead(JOY_X);
+    totalY += analogRead(JOY_Y);
+
+    delay(10);
+  }
+
+  centerX = totalX / 100;
+  centerY = totalY / 100;
+
+  filteredX = centerX;
+  filteredY = centerY;
+
+  Serial.print("Center X: ");
+  Serial.println(centerX);
+
+  Serial.print("Center Y: ");
+  Serial.println(centerY);
+
+  Serial.println("Calibration complete.");
+}
+
+
+// =====================================================
+// CONVERT JOYSTICK
+// =====================================================
+
+int convertAxis(int value, int center) {
+
+  int difference = value - center;
+
+  // Deadzone
+  if (abs(difference) <= DEADZONE) {
+    return 0;
+  }
+
+  int output;
+
+  if (difference > 0) {
+
+    output = map(
+      difference,
+      DEADZONE,
+      4095 - center,
+      0,
+      255
+    );
+
+  } else {
+
+    output = map(
+      difference,
+      -center,
+      -DEADZONE,
+      -255,
+      0
+    );
+  }
+
+  return constrain(output, -255, 255);
+}
+
+
+// =====================================================
+// SETUP
+// =====================================================
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(JOY_X, INPUT);
+  pinMode(JOY_Y, INPUT);
+  pinMode(JOY_SW, INPUT_PULLUP);
+
+  analogReadResolution(12);
+
+  // Start hotspot
+  WiFi.mode(WIFI_AP);
+
+  WiFi.softAP(
+    SSID,
+    PASSWORD
+  );
+
+  delay(500);
+
+  Serial.println();
+  Serial.println("==============================");
+  Serial.println("     ROVER REMOTE ESP32");
+  Serial.println("==============================");
+
+  Serial.print("SSID: ");
+  Serial.println(SSID);
+
+  Serial.print("REMOTE IP: ");
+  Serial.println(WiFi.softAPIP());
+
+  calibrateJoystick();
+
+  udp.begin(UDP_PORT);
+
+  Serial.print("UDP PORT: ");
+  Serial.println(UDP_PORT);
+
+  Serial.println("REMOTE READY");
+}
+
+
+// =====================================================
+// LOOP
+// =====================================================
+
+void loop() {
+
+  int rawX = readAverage(JOY_X);
+  int rawY = readAverage(JOY_Y);
+
+  // Smooth
+  filteredX =
+    (SMOOTHING * rawX) +
+    ((1.0 - SMOOTHING) * filteredX);
+
+  filteredY =
+    (SMOOTHING * rawY) +
+    ((1.0 - SMOOTHING) * filteredY);
+
+  // Convert
+  int steering = convertAxis(
+    (int)filteredX,
+    centerX
+  );
+
+  int throttle = convertAxis(
+    (int)filteredY,
+    centerY
+  );
+
+  if (INVERT_Y) {
+    throttle = -throttle;
+  }
+
+  int button =
+    digitalRead(JOY_SW) == LOW ? 1 : 0;
+
+  // Broadcast to rover
+  IPAddress broadcastIP(
+    192, 168, 4, 255
+  );
+
+  udp.beginPacket(
+    broadcastIP,
+    UDP_PORT
+  );
+
+  udp.print(throttle);
+  udp.print(",");
+  udp.print(steering);
+  udp.print(",");
+  udp.print(button);
+
+  udp.endPacket();
+
+  // Debug
+  Serial.print("Throttle: ");
+  Serial.print(throttle);
+
+  Serial.print(" | Steering: ");
+  Serial.print(steering);
+
+  Serial.print(" | Button: ");
+  Serial.println(button);
+
+  delay(50);
+}
