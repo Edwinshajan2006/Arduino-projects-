@@ -66,6 +66,15 @@
 * Component placement also needs to account for **ESP32 connections, wiring, accessibility, and the overall rover structure**.
 * The 3D model is currently being refined, and further adjustments will be made before producing the final printed parts.
 
+## 10. Motor GPIO Reassignment
+
+* The rover motors were not responding correctly with the previous ESP32 GPIO configuration.
+* Investigated the motor-control wiring and GPIO assignments.
+* Reassigned the ESP32 GPIO pins used by both motor drivers.
+* Updated the rover motor-control code to match the new GPIO assignments.
+* The new configuration maintains separate control of the left and right motor drivers.
+* Further testing is being carried out to verify forward, reverse, left, and right movement with the new pin configuration.
+
 ## Current Status
 
 * The rover's communication and motor-control system has gone through multiple rounds of testing and improvement.
