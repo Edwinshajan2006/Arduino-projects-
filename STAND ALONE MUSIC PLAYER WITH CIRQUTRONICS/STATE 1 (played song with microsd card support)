@@ -1,0 +1,347 @@
+#include <Arduino.h>
+#include <SD.h>
+#include <BluetoothA2DPSource.h>
+#include <MP3DecoderHelix.h>
+
+using namespace libhelix;
+
+BluetoothA2DPSource a2dp_source;
+MP3DecoderHelix mp3;
+
+uint8_t tws_mac[] = {
+  0x28, 0x04, 0xC6,
+  0x64, 0x9E, 0x34
+};
+
+#define SD_CS 5
+
+#define BUFFER_SIZE 16384
+
+uint8_t pcmBuffer[BUFFER_SIZE];
+
+volatile size_t head = 0;
+volatile size_t tail = 0;
+
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+File song;
+bool songFinished = false;
+
+void printMemory()
+{
+  Serial.print("Free heap: ");
+  Serial.println(ESP.getFreeHeap());
+
+  Serial.print("Min free heap: ");
+  Serial.println(ESP.getMinFreeHeap());
+}
+
+// =====================================================
+// PCM BUFFER
+// =====================================================
+
+size_t availablePCM()
+{
+  portENTER_CRITICAL(&mux);
+
+  size_t n;
+
+  if (head >= tail)
+    n = head - tail;
+  else
+    n = BUFFER_SIZE - tail + head;
+
+  portEXIT_CRITICAL(&mux);
+
+  return n;
+}
+
+
+size_t freePCM()
+{
+  return BUFFER_SIZE - availablePCM() - 1;
+}
+
+
+// =====================================================
+// MP3 → PCM
+// =====================================================
+
+void mp3Callback(
+  MP3FrameInfo &info,
+  int16_t *pcm,
+  size_t len,
+  void *ref)
+{
+  // For our first version, use 44.1 kHz stereo MP3
+  if (info.samprate != 44100)
+    return;
+
+  if (info.nChans == 2)
+  {
+    size_t bytes = len * sizeof(int16_t);
+
+    if (freePCM() < bytes)
+      return;
+
+    portENTER_CRITICAL(&mux);
+
+    for (size_t i = 0; i < bytes; i++)
+    {
+      pcmBuffer[head] = ((uint8_t *)pcm)[i];
+
+      head++;
+
+      if (head >= BUFFER_SIZE)
+        head = 0;
+    }
+
+    portEXIT_CRITICAL(&mux);
+  }
+  else
+  {
+    // MONO → STEREO
+
+    if (freePCM() < len * 4)
+      return;
+
+    portENTER_CRITICAL(&mux);
+
+    for (size_t i = 0; i < len; i++)
+    {
+      uint8_t low  = ((uint8_t *)&pcm[i])[0];
+      uint8_t high = ((uint8_t *)&pcm[i])[1];
+
+      // Left
+      pcmBuffer[head++] = low;
+      if (head >= BUFFER_SIZE) head = 0;
+
+      pcmBuffer[head++] = high;
+      if (head >= BUFFER_SIZE) head = 0;
+
+      // Right
+      pcmBuffer[head++] = low;
+      if (head >= BUFFER_SIZE) head = 0;
+
+      pcmBuffer[head++] = high;
+      if (head >= BUFFER_SIZE) head = 0;
+    }
+
+    portEXIT_CRITICAL(&mux);
+  }
+}
+
+
+// =====================================================
+// PCM → A2DP
+// =====================================================
+
+int32_t get_audio_data(uint8_t *data, int32_t len)
+{
+  portENTER_CRITICAL(&mux);
+
+  size_t available;
+
+  if (head >= tail)
+    available = head - tail;
+  else
+    available = BUFFER_SIZE - tail + head;
+
+  size_t copyLen = min((size_t)len, available);
+
+  for (size_t i = 0; i < copyLen; i++)
+  {
+    data[i] = pcmBuffer[tail];
+
+    tail++;
+
+    if (tail >= BUFFER_SIZE)
+      tail = 0;
+  }
+
+  portEXIT_CRITICAL(&mux);
+
+
+  // Silence when buffer is empty
+
+  for (size_t i = copyLen; i < (size_t)len; i++)
+    data[i] = 0;
+
+  return len;
+}
+
+
+// =====================================================
+// BLUETOOTH STATUS
+// =====================================================
+
+void connection_callback(
+  esp_a2d_connection_state_t state,
+  void *obj)
+{
+  switch (state)
+  {
+    case ESP_A2D_CONNECTION_STATE_CONNECTED:
+      Serial.println("CONNECTED SUCCESSFULLY");
+      break;
+
+    case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
+      Serial.println("DISCONNECTED");
+      break;
+
+    case ESP_A2D_CONNECTION_STATE_CONNECTING:
+      Serial.println("CONNECTING...");
+      break;
+
+    default:
+      Serial.print("A2DP STATE: ");
+      Serial.println((int)state);
+      break;
+  }
+}
+
+
+// =====================================================
+// SETUP
+// =====================================================
+
+void setup()
+{
+  Serial.begin(9600);
+  Serial.println();
+  Serial.print("Reset reason: ");
+  Serial.println(esp_reset_reason());
+
+printMemory();
+
+  delay(1000);
+
+  Serial.println();
+  Serial.println("==============================");
+  Serial.println(" ESP32 SD MUSIC PLAYER");
+  Serial.println("==============================");
+
+
+  // ---------------------------------------------------
+  // SD
+  // ---------------------------------------------------
+
+  Serial.println("Initializing SD...");
+
+  if (!SD.begin(SD_CS))
+  {
+    Serial.println("SD FAILED");
+
+    while (1)
+      delay(1000);
+  }
+
+  Serial.println("SD OK");
+
+
+  // ---------------------------------------------------
+  // SONG
+  // ---------------------------------------------------
+
+  song = SD.open("/Alan_Walker_-_Faded_Vocal_Mix_(mp3.pm).mp3");
+
+  if (!song)
+  {
+    Serial.println("song.mp3 NOT FOUND");
+
+    while (1)
+      delay(1000);
+  }
+
+  Serial.print("Song size: ");
+  Serial.print(song.size());
+  Serial.println(" bytes");
+
+
+  // ---------------------------------------------------
+  // MP3 DECODER
+  // ---------------------------------------------------
+
+  mp3.setDataCallback(mp3Callback);
+
+  if (!mp3.begin())
+  {
+    Serial.println("MP3 DECODER FAILED");
+
+    while (1)
+      delay(1000);
+  }
+
+  Serial.println("MP3 DECODER OK");
+
+
+  // ---------------------------------------------------
+  // A2DP
+  // ---------------------------------------------------
+
+  a2dp_source.set_data_callback(get_audio_data);
+
+  a2dp_source.set_on_connection_state_changed(
+    connection_callback
+  );
+
+  // Your installed library uses this version
+  a2dp_source.set_auto_reconnect(tws_mac);
+
+  printMemory();
+  Serial.println("Starting A2DP...");
+  Serial.println("Target: 28:04:C6:64:9E:34");
+
+  a2dp_source.start();
+}
+
+
+// =====================================================
+// LOOP
+// =====================================================
+
+void loop()
+{
+  // Keep feeding MP3 decoder
+
+  if (!songFinished && freePCM() > 4096)
+  {
+    uint8_t buffer[1024];
+
+    int bytesRead = song.read(
+      buffer,
+      sizeof(buffer)
+    );
+
+    if (bytesRead > 0)
+    {
+      mp3.write(
+        buffer,
+        bytesRead
+      );
+    }
+    else
+    {
+      Serial.println("SONG FINISHED");
+
+      mp3.flush();
+
+      songFinished = true;
+    }
+  }
+
+
+  // Restart song
+
+  if (songFinished && availablePCM() < 1000)
+  {
+    Serial.println("RESTARTING SONG");
+
+    song.seek(0);
+
+    mp3.end();
+    mp3.begin();
+
+    songFinished = false;
+  }
+}
