@@ -1,0 +1,411 @@
+
+#include <Arduino.h>
+#include <SPI.h>
+#include <SD.h>
+#include <BluetoothA2DPSource.h>
+#include <MP3DecoderHelix.h>
+
+using namespace libhelix;
+
+// ==========================================
+// OBJECTS
+// ==========================================
+
+BluetoothA2DPSource a2dp_source;
+MP3DecoderHelix mp3;
+
+File song;
+
+// ==========================================
+// TWS MAC ADDRESS
+// ==========================================
+
+uint8_t tws_mac[] = {
+  0x28, 0x04, 0xC6,
+  0x64, 0x9E, 0x34
+};
+
+// ==========================================
+// SD CARD
+// ==========================================
+
+#define SD_CS 5
+
+// Put your music file in the SD card as:
+// /song.mp3
+
+// ==========================================
+// PCM BUFFER
+// ==========================================
+
+#define BUFFER_SIZE 16384
+
+uint8_t pcmBuffer[BUFFER_SIZE];
+
+volatile size_t head = 0;
+volatile size_t tail = 0;
+
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+bool songFinished = false;
+bool decoderReady = false;
+
+// ==========================================
+// BUFFER FUNCTIONS
+// ==========================================
+
+size_t availablePCM()
+{
+  portENTER_CRITICAL(&mux);
+
+  size_t n;
+
+  if (head >= tail)
+    n = head - tail;
+  else
+    n = BUFFER_SIZE - tail + head;
+
+  portEXIT_CRITICAL(&mux);
+
+  return n;
+}
+
+size_t freePCM()
+{
+  return BUFFER_SIZE - availablePCM() - 1;
+}
+
+// ==========================================
+// MP3 DECODER CALLBACK
+// ==========================================
+
+void mp3Callback(
+  MP3FrameInfo &info,
+  int16_t *pcm,
+  size_t len,
+  void *ref)
+{
+  if (info.samprate != 44100)
+    return;
+
+  portENTER_CRITICAL(&mux);
+
+  // STEREO
+  if (info.nChans == 2)
+  {
+    size_t bytes = len * sizeof(int16_t);
+
+    size_t used;
+
+    if (head >= tail)
+      used = head - tail;
+    else
+      used = BUFFER_SIZE - tail + head;
+
+    size_t freeSpace = BUFFER_SIZE - used - 1;
+
+    if (freeSpace >= bytes)
+    {
+      uint8_t *src = (uint8_t *)pcm;
+
+      for (size_t i = 0; i < bytes; i++)
+      {
+        pcmBuffer[head] = src[i];
+
+        head++;
+
+        if (head >= BUFFER_SIZE)
+          head = 0;
+      }
+    }
+  }
+
+  // MONO TO STEREO
+  else if (info.nChans == 1)
+  {
+    size_t bytes = len * 4;
+
+    size_t used;
+
+    if (head >= tail)
+      used = head - tail;
+    else
+      used = BUFFER_SIZE - tail + head;
+
+    size_t freeSpace = BUFFER_SIZE - used - 1;
+
+    if (freeSpace >= bytes)
+    {
+      for (size_t i = 0; i < len; i++)
+      {
+        uint8_t low = ((uint8_t *)&pcm[i])[0];
+        uint8_t high = ((uint8_t *)&pcm[i])[1];
+
+        // LEFT CHANNEL
+        pcmBuffer[head++] = low;
+        if (head >= BUFFER_SIZE) head = 0;
+
+        pcmBuffer[head++] = high;
+        if (head >= BUFFER_SIZE) head = 0;
+
+        // RIGHT CHANNEL
+        pcmBuffer[head++] = low;
+        if (head >= BUFFER_SIZE) head = 0;
+
+        pcmBuffer[head++] = high;
+        if (head >= BUFFER_SIZE) head = 0;
+      }
+    }
+  }
+
+  portEXIT_CRITICAL(&mux);
+}
+
+// ==========================================
+// PCM TO BLUETOOTH
+// ==========================================
+
+int32_t get_audio_data(
+  Frame *frame,
+  int32_t frame_count)
+{
+  portENTER_CRITICAL(&mux);
+
+  size_t available;
+
+  if (head >= tail)
+    available = head - tail;
+  else
+    available = BUFFER_SIZE - tail + head;
+
+  for (int i = 0; i < frame_count; i++)
+  {
+    if (available >= 4)
+    {
+      int16_t left;
+      int16_t right;
+
+      uint8_t bytes[4];
+
+      for (int j = 0; j < 4; j++)
+      {
+        bytes[j] = pcmBuffer[tail];
+
+        tail++;
+
+        if (tail >= BUFFER_SIZE)
+          tail = 0;
+      }
+
+      memcpy(&left, bytes, 2);
+      memcpy(&right, bytes + 2, 2);
+
+      frame[i].channel1 = left;
+      frame[i].channel2 = right;
+
+      available -= 4;
+    }
+    else
+    {
+      frame[i].channel1 = 0;
+      frame[i].channel2 = 0;
+    }
+  }
+
+  portEXIT_CRITICAL(&mux);
+
+  return frame_count;
+}
+
+// ==========================================
+// BLUETOOTH CONNECTION STATUS
+// ==========================================
+
+void connection_callback(
+  esp_a2d_connection_state_t state,
+  void *obj)
+{
+  switch (state)
+  {
+    case ESP_A2D_CONNECTION_STATE_CONNECTED:
+
+      Serial.println();
+      Serial.println("TWS CONNECTED");
+      Serial.println("BLUETOOTH AUDIO READY");
+
+      break;
+
+    case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
+
+      Serial.println("TWS DISCONNECTED");
+
+      break;
+
+    case ESP_A2D_CONNECTION_STATE_CONNECTING:
+
+      Serial.println("CONNECTING TO TWS...");
+
+      break;
+
+    default:
+
+      Serial.print("A2DP STATE: ");
+      Serial.println((int)state);
+
+      break;
+  }
+}
+
+// ==========================================
+// SETUP
+// ==========================================
+
+void setup()
+{
+  Serial.begin(115200);
+
+  delay(1000);
+
+  Serial.println();
+  Serial.println("==============================");
+  Serial.println("     NED MUSIC PLAYER");
+  Serial.println("==============================");
+
+  // ----------------------------------------
+  // INITIALIZE SD CARD
+  // ----------------------------------------
+
+  Serial.println("INITIALIZING SD CARD...");
+
+  if (!SD.begin(SD_CS))
+  {
+    Serial.println("SD CARD FAILED");
+
+    while (1)
+      delay(1000);
+  }
+
+  Serial.println("SD CARD READY");
+
+  // ----------------------------------------
+  // OPEN MP3 FILE
+  // ----------------------------------------
+
+  song = SD.open("/song.mp3");
+
+  if (!song)
+  {
+    Serial.println("song.mp3 NOT FOUND");
+
+    while (1)
+      delay(1000);
+  }
+
+  Serial.print("SONG SIZE: ");
+  Serial.println(song.size());
+
+  // ----------------------------------------
+  // INITIALIZE MP3 DECODER
+  // ----------------------------------------
+
+  mp3.setDataCallback(mp3Callback);
+
+  if (!mp3.begin())
+  {
+    Serial.println("MP3 DECODER FAILED");
+
+    while (1)
+      delay(1000);
+  }
+
+  decoderReady = true;
+
+  Serial.println("MP3 DECODER READY");
+
+  // ----------------------------------------
+  // BLUETOOTH A2DP
+  // ----------------------------------------
+
+  a2dp_source.set_data_callback_in_frames(
+    get_audio_data
+  );
+
+  a2dp_source.set_on_connection_state_changed(
+    connection_callback
+  );
+
+  a2dp_source.set_auto_reconnect(tws_mac);
+
+  a2dp_source.set_volume(80);
+
+  Serial.println("CONNECTING TO REALME BUDS...");
+
+  Serial.println("TARGET MAC:");
+  Serial.println("28:04:C6:64:9E:34");
+
+  a2dp_source.start();
+
+  Serial.println("BLUETOOTH STARTED");
+
+}
+
+// ==========================================
+// MAIN LOOP
+// ==========================================
+
+void loop()
+{
+  // FEED MP3 DECODER
+
+  if (decoderReady && !songFinished && freePCM() > 4096)
+  {
+    uint8_t buffer[1024];
+
+    int bytesRead = song.read(
+      buffer,
+      sizeof(buffer)
+    );
+
+    if (bytesRead > 0)
+    {
+      mp3.write(
+        buffer,
+        bytesRead
+      );
+    }
+    else
+    {
+      Serial.println("SONG FINISHED");
+
+      mp3.flush();
+
+      songFinished = true;
+    }
+  }
+
+  // RESTART SONG
+
+  if (songFinished && availablePCM() < 1000)
+  {
+    Serial.println("RESTARTING SONG");
+
+    song.seek(0);
+
+    mp3.end();
+
+    if (mp3.begin())
+    {
+      songFinished = false;
+
+      Serial.println("PLAYING AGAIN");
+    }
+    else
+    {
+      Serial.println("DECODER RESTART FAILED");
+
+      decoderReady = false;
+    }
+  }
+
+  delay(1);
+}
